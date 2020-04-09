@@ -103,6 +103,59 @@ Spring容器会先创建BeanC然后时BeanB再然后是BeanA。但如果Bean之�
 
 当使用构造方法注入时，也会遇到这种情况，使用其他类型注入则可能不会遇到这种情况。
 
+#### Spring中的三级缓存
+
+spring单例对象的创建步骤：
+
+* createBeanInstance：第一步就是通过构造方法去进行实例化对象，并没有把对象的属性也给注入进去
+* 注入实例对象的属性，也就是从这步对spring xml中指定的property进行populate
+* 最后一步其实是初始化XML中的init方法，来进行最终完成实例对象的创建。但是AfterPropertiesSet方法会发生循环依赖的步骤集中在第一步和第二步。
+
+```java
+// singletonObjects指单例对象的cache （一级缓存）
+private final Map<String, Object> singletonObjects = new ConcurrentHashMap<String, Object>(256);
+
+// singletonFactories指单例对象工厂的cache（三级缓存）
+private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<String, ObjectFactory<?>>(16);
+
+// earlySingletonObjects指提前曝光的单例对象的cache（二级缓存）
+private final Map<String, Object> earlySingletonObjects = new HashMap<String, Object>(16);
+
+```
+
+调用缓存的步骤：
+
+* Spring调用getSingleton（String beanName, boolean allowEarlyReference）来获取想要的单例对象
+* 第一步会先进行通过singletonObjects这个一级缓存的集合中去获取对象，如果没有获取成功的话并且使用isSingletonCurrentlyInCreation（beanName）去判断对应的单例对象是否正在创建中（也就是说当单例对象没有被初始化完全，走到初始化的第一步或者第二的时候），如果是正在创建中的话，会继续走到下一步
+* 从earlySingletonObjects中继续获取这个对象，如果又没有获取到这个单例对象的话，并且通过参数传进来的allowEarlyReference标志，看是不是允许singletonFactories（三级缓存集合）去拿到该实例对象，如果allowEarlyReference为Ture的话，那么继续下一步
+* 此时上一步中并没有从earlySingletonObjects二级缓存集合中拿到想要的实例对象，最后只能从三级缓存singletonFactories （单例工厂集合中）去获取实例对象，
+* 然后把获取的对象通过Put（beanName, singletonObject）放到earlySingletonObjects（二级缓存中），然后在再从singletonFactories（三级缓存）对象中的集合中把该对象给remove（beanName）出去。
+
+```java
+protected Object getSingleton(String beanName, boolean allowEarlyReference) {
+ 从一级缓存获取
+   Object singletonObject = this.singletonObjects.get(beanName);
+   if (singletonObject == null && isSingletonCurrentlyInCreation(beanName)) {
+      synchronized (this.singletonObjects) {
+       从二级缓存获取
+         singletonObject = this.earlySingletonObjects.get(beanName);
+         if (singletonObject == null && allowEarlyReference) {
+          从三级缓存获取
+            ObjectFactory<?> singletonFactory = this.singletonFactories.get(beanName);
+            if (singletonFactory != null) {
+               singletonObject = singletonFactory.getObject();
+               this.earlySingletonObjects.put(beanName, singletonObject);
+               this.singletonFactories.remove(beanName);
+            }
+         }
+      }
+   }
+   return (singletonObject != NULL_OBJECT ? singletonObject : null);}
+
+```
+
+
+
 #### 解决方案
 
 1. 重新设计，去掉之间的依赖
@@ -198,3 +251,5 @@ Spring容器会先创建BeanC然后时BeanB再然后是BeanA。但如果Bean之�
 [spring中的循环依赖解决方案](https://www.jianshu.com/p/b65c57f4d45d)
 
 [Circular Dependencies in Spring](https://www.baeldung.com/circular-dependencies-in-spring)
+
+[Spring常问的------真实大厂面试题汇总（含答案）](https://blog.csdn.net/qq_36520235/article/details/88257749)
